@@ -8,10 +8,11 @@ import (
 
 	"github.com/gocolly/colly/v2"
 )
+
 /* Store the calls locally */
 var (
 	calls []Call
-	mu sync.Mutex
+	mu    sync.Mutex
 )
 
 type Call struct {
@@ -22,14 +23,17 @@ type Call struct {
 	Talkgroup string `json:"talkgroup"`
 }
 
-func req(w http.ResponseWriter, r *http.Request){
+func req(w http.ResponseWriter, r *http.Request) {
 	w.Header().Add("Content-Type", "application/json")
+
+	mu.Lock()
 	json.NewEncoder(w).Encode(calls)
+	mu.Unlock()
 }
 
-func serv(){
+func serv() {
 	srv := &http.Server{
-	Addr: ":8181",
+		Addr: ":8181",
 	}
 	http.HandleFunc("/monitor", req)
 	srv.ListenAndServe()
@@ -41,7 +45,7 @@ func scrape(callback chan []Call) {
 	c := colly.NewCollector()
 	c.OnHTML("table > tbody", func(h *colly.HTMLElement) {
 		h.ForEach("tr", func(_ int, el *colly.HTMLElement) {
-			if  el.ChildText("td:nth-child(1)") != "" {
+			if el.ChildText("td:nth-child(1)") != "" {
 				this_call := Call{Num: el.ChildText("td:nth-child(1)"), Date: el.ChildText("td:nth-child(3)"), Call: el.ChildText("td:nth-child(8)"), Slot: el.ChildText("td:nth-child(10)"), Talkgroup: el.ChildText("td:nth-child(11)")}
 				new_calls = append(new_calls, this_call)
 			}
@@ -62,12 +66,13 @@ func main() {
 
 	for {
 		/* TODO: Set the cache update time in config */
-		if time.Since(last_update) > time.Second * 2{
+		if time.Since(last_update) > time.Second*3 {
 			last_update = time.Now()
-			mu.Lock()
 			go scrape(callback)
+			mu.Lock()
 			calls = <-callback
 			mu.Unlock()
 		}
+		time.Sleep(time.Millisecond * 256)
 	}
 }
