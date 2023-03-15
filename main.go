@@ -2,7 +2,9 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
+	"os"
 	"sync"
 	"time"
 
@@ -23,6 +25,11 @@ type Call struct {
 	Talkgroup string `json:"talkgroup"`
 }
 
+type Config struct {
+	Page string `json:"page"`
+	Reload int64 `json:"reload"`
+}
+
 func req(w http.ResponseWriter, r *http.Request) {
 	w.Header().Add("Content-Type", "application/json")
 
@@ -40,7 +47,7 @@ func serv() {
 }
 
 /* Scrape the dashboard */
-func scrape(callback chan []Call) {
+func scrape(config *Config, callback chan []Call) {
 	var new_calls []Call
 	c := colly.NewCollector()
 	c.OnHTML("table > tbody", func(h *colly.HTMLElement) {
@@ -52,23 +59,32 @@ func scrape(callback chan []Call) {
 		})
 	})
 
-	/* TODO: Store the URL in a config file */
-	c.Visit("http://phoenix-f.opendmr.net/ipsc/_monitor.html")
+	c.Visit(config.Page)
 	callback <- new_calls
 }
 
 func main() {
+	cFile, err := os.ReadFile("./dvsmon.conf")
+	if err != nil {
+		fmt.Println("Can't open config file! Expecting .dvsmon.conf: ", err)
+		os.Exit(-1)
+	}
+
+	var config Config
+	if err := json.Unmarshal(cFile, &config); err != nil {
+		fmt.Println("Trouble parsing config file: ", err)
+	}
+
 	callback := make(chan []Call)
 	last_update := time.Now()
 
-	/* Server the API service */
+	/* Serve the API service */
 	go serv()
 
 	for {
-		/* TODO: Set the cache update time in config */
-		if time.Since(last_update) > time.Second*3 {
+		if time.Since(last_update) > time.Second*time.Duration(config.Reload) {
 			last_update = time.Now()
-			go scrape(callback)
+			go scrape(&config, callback)
 			mu.Lock()
 			calls = <-callback
 			mu.Unlock()
