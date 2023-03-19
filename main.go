@@ -3,8 +3,10 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io/ioutil"
 	"net/http"
 	"os"
+	"strconv"
 	"sync"
 	"time"
 
@@ -13,13 +15,17 @@ import (
 
 /* Store the calls locally */
 var (
-	calls []Call
-	mu    sync.Mutex
+	calls       []Call
+	mu          sync.Mutex
+	users       Users
+	user_name   map[string]string
+	user_update time.Time
 )
 
 type Call struct {
 	Num       string `json:"num"`
 	Date      string `json:"date"`
+	Name      string `json:"name"`
 	Call      string `json:"call"`
 	Id        string `json:"id"`
 	Sec       string `json:"sec"`
@@ -27,9 +33,70 @@ type Call struct {
 	Talkgroup string `json:"talkgroup"`
 }
 
+/*
+User data from radioid.net database
+we can save memory by ignoring unused fields if required
+*/
+type Users struct {
+	Users []struct {
+		First_name string `json:"fname"`
+		Name       string `json:"name"`
+		Country    string `json:"country"`
+		Callsign   string `json:"callsign"`
+		City       string `json:"city"`
+		Surname    string `json:"surname"`
+		Radio_id   uint32 `json:"radio_id"`
+		Id         int    `json:"id"`
+		State      string `json:"state"`
+	} `json:"users"`
+}
+
 type Config struct {
-	Page   string `json:"page"`
-	Reload int64  `json:"reload"`
+	Page         string `json:"page"`
+	Reload       int64  `json:"reload"`
+	Users        string `json:"users"`
+	Users_reload int64  `json:"users_reload"`
+}
+
+/* Pull data from radioid.net user dump */
+func nameLookup(config *Config) {
+	/* Only update cache if timer has expired or we have no data
+	if we fail just silently return as we will try later */
+	if time.Since(user_update) >= time.Second*time.Duration(config.Users_reload) || len(users.Users) == 0 {
+		user_update = time.Now()
+		client := &http.Client{}
+		reqs, err := http.NewRequest("GET", config.Users, nil)
+
+		if err != nil {
+			return
+		}
+
+		reqs.Header.Add("Content-Type", "application/json")
+		resp, err := client.Do(reqs)
+		if err != nil {
+			return
+		}
+
+		defer resp.Body.Close()
+
+		if resp.StatusCode != 200 {
+			return
+		}
+
+		body, err := ioutil.ReadAll(resp.Body)
+		if err != nil {
+			return
+		}
+		err = json.Unmarshal(body, &users)
+		if err != nil {
+			fmt.Println(err)
+		}
+
+		for _, u := range users.Users {
+			user_name[strconv.Itoa(u.Id)] = u.Name
+		}
+
+	}
 }
 
 func req(w http.ResponseWriter, r *http.Request) {
@@ -52,10 +119,12 @@ func serv() {
 func scrape(config *Config, callback chan []Call) {
 	var new_calls []Call
 	c := colly.NewCollector()
+	nameLookup(config)
 	c.OnHTML("table > tbody", func(h *colly.HTMLElement) {
 		h.ForEach("tr", func(_ int, el *colly.HTMLElement) {
 			if el.ChildText("td:nth-child(1)") != "" {
 				this_call := Call{Num: el.ChildText("td:nth-child(1)"), Date: el.ChildText("td:nth-child(3)"), Call: el.ChildText("td:nth-child(8)"), Id: el.ChildText("td:nth-child(7)"), Sec: el.ChildText("td:nth-child(4)"), Slot: el.ChildText("td:nth-child(10)"), Talkgroup: el.ChildText("td:nth-child(11)")}
+				this_call.Name = user_name[this_call.Id]
 				new_calls = append(new_calls, this_call)
 			}
 		})
@@ -79,7 +148,8 @@ func main() {
 
 	callback := make(chan []Call)
 	last_update := time.Now()
-
+	user_update = time.Now()
+	user_name = make(map[string]string)
 	/* Serve the API service */
 	go serv()
 
