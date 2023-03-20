@@ -17,6 +17,8 @@ import (
 var (
 	calls       []Call
 	mu          sync.Mutex
+	uptime      time.Time
+	stats       Stats
 	users       Users
 	user_name   map[string]string
 	user_update time.Time
@@ -31,6 +33,13 @@ type Call struct {
 	Sec       string `json:"sec"`
 	Slot      string `json:"slot"`
 	Talkgroup string `json:"talkgroup"`
+}
+
+/* Store API Stats */
+type Stats struct {
+	Hits    uint64 `json:"hits"`
+	Refresh uint64 `json:"refresh"`
+	Uptime  uint64 `json:"uptime"`
 }
 
 /*
@@ -103,7 +112,17 @@ func req(w http.ResponseWriter, r *http.Request) {
 	w.Header().Add("Content-Type", "application/json")
 
 	mu.Lock()
+	stats.Hits++
 	json.NewEncoder(w).Encode(calls)
+	mu.Unlock()
+}
+
+func getStats(w http.ResponseWriter, r *http.Request) {
+	w.Header().Add("Content-Type", "application/json")
+
+	mu.Lock()
+	stats.Uptime = uint64(time.Since(uptime)) / 100_000_000_0
+	json.NewEncoder(w).Encode(stats)
 	mu.Unlock()
 }
 
@@ -112,6 +131,7 @@ func serv() {
 		Addr: ":8181",
 	}
 	http.HandleFunc("/monitor", req)
+	http.HandleFunc("/monitor/stats", getStats)
 	srv.ListenAndServe()
 }
 
@@ -148,6 +168,7 @@ func main() {
 
 	callback := make(chan []Call)
 	last_update := time.Now()
+	uptime = time.Now()
 	user_update = time.Now()
 	user_name = make(map[string]string)
 	/* Serve the API service */
@@ -158,6 +179,7 @@ func main() {
 			last_update = time.Now()
 			go scrape(&config, callback)
 			mu.Lock()
+			stats.Refresh++
 			calls = <-callback
 			mu.Unlock()
 		}
