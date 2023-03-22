@@ -16,6 +16,7 @@ import (
 /* Store the calls locally */
 var (
 	calls       []Call
+	last_access time.Time
 	mu          sync.Mutex
 	uptime      time.Time
 	stats       Stats
@@ -61,10 +62,11 @@ type Users struct {
 }
 
 type Config struct {
-	Page         string `json:"page"`
-	Reload       int64  `json:"reload"`
-	Users        string `json:"users"`
-	Users_reload int64  `json:"users_reload"`
+	Last_access  time.Duration `json:"last_access"`
+	Page         string        `json:"page"`
+	Reload       int64         `json:"reload"`
+	Users        string        `json:"users"`
+	Users_reload int64         `json:"users_reload"`
 }
 
 /* Pull data from radioid.net user dump */
@@ -113,6 +115,7 @@ func req(w http.ResponseWriter, r *http.Request) {
 
 	mu.Lock()
 	stats.Hits++
+	last_access = time.Now()
 	json.NewEncoder(w).Encode(calls)
 	mu.Unlock()
 }
@@ -167,6 +170,7 @@ func main() {
 	}
 
 	callback := make(chan []Call)
+	last_access = time.Now()
 	last_update := time.Now()
 	uptime = time.Now()
 	user_update = time.Now()
@@ -175,7 +179,14 @@ func main() {
 	go serv()
 
 	for {
-		if time.Since(last_update) > time.Second*time.Duration(config.Reload) {
+		time.Sleep(time.Millisecond * 256)
+
+		/* If we're idle don't scrape */
+		if time.Since(last_access) >= time.Minute*config.Last_access {
+			continue
+		}
+
+		if time.Since(last_update) >= time.Second*time.Duration(config.Reload) {
 			last_update = time.Now()
 			go scrape(&config, callback)
 			mu.Lock()
@@ -183,6 +194,5 @@ func main() {
 			calls = <-callback
 			mu.Unlock()
 		}
-		time.Sleep(time.Millisecond * 256)
 	}
 }
