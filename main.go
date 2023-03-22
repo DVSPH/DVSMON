@@ -64,7 +64,7 @@ type Users struct {
 type Config struct {
 	Last_access  time.Duration `json:"last_access"`
 	Page         string        `json:"page"`
-	Reload       int64         `json:"reload"`
+	Reload       time.Duration `json:"reload"`
 	Users        string        `json:"users"`
 	Users_reload int64         `json:"users_reload"`
 }
@@ -186,7 +186,7 @@ func main() {
 			continue
 		}
 
-		if time.Since(last_update) >= time.Second*time.Duration(config.Reload) {
+		if time.Since(last_update) >= time.Second*config.Reload {
 			last_update = time.Now()
 			go scrape(&config, callback)
 			mu.Lock()
