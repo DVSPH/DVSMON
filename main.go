@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -158,7 +159,15 @@ func scrape(config *Config, callback chan []Call) {
 }
 
 func main() {
-	cFile, err := os.ReadFile("./dvsmon.conf")
+	cFileL := "./dvsmon.conf"
+
+	if len(os.Args) > 2 {
+		if !strings.ContainsAny(os.Args[1], "\\!@#$%^&*():;'\"|<>?") {
+			cFileL = os.Args[1]
+		}
+	}
+
+	cFile, err := os.ReadFile(cFileL)
 	if err != nil {
 		fmt.Println("Can't open config file! Expecting .dvsmon.conf: ", err)
 		os.Exit(-1)
