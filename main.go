@@ -123,11 +123,11 @@ func req(w http.ResponseWriter, r *http.Request) {
 	w.Header().Add("Content-Type", "application/json")
 
 	monitor.Mu.Lock()
+	monitor.Last_access = time.Now()
 	monitor.Stats.Hits++
 
 	/* Wait for new data */
 	if monitor.Cache_stale {
-		monitor.Last_access = time.Now()
 		for {
 			monitor.Mu.Unlock()
 			time.Sleep(time.Millisecond * 10)
@@ -138,7 +138,6 @@ func req(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	monitor.Last_access = time.Now()
 	json.NewEncoder(w).Encode(monitor.Calls)
 	monitor.Mu.Unlock()
 }
