@@ -16,14 +16,7 @@ import (
 
 /* Store the calls locally */
 var (
-	calls       []Call
-	last_access time.Time
-	mu          sync.Mutex
-	uptime      time.Time
-	stats       Stats
-	users       Users
-	user_name   map[string]string
-	user_update time.Time
+	monitor Monitor
 )
 
 type Call struct {
@@ -37,8 +30,23 @@ type Call struct {
 	Talkgroup string `json:"talkgroup"`
 }
 
+/* Monitor data */
+type Monitor struct {
+	Calls       []Call
+	Config      Config
+	Cache_stale bool
+	Last_access time.Time
+	Mu          sync.Mutex
+	Stats       Stats
+	Uptime      time.Time
+	Users       Users
+	User_name   map[string]string
+	User_update time.Time
+}
+
 /* Store API Stats */
 type Stats struct {
+	Cache   bool   `json:"stale_cache"`
 	Hits    uint64 `json:"hits"`
 	Refresh uint64 `json:"refresh"`
 	Uptime  uint64 `json:"uptime"`
@@ -74,8 +82,8 @@ type Config struct {
 func nameLookup(config *Config) {
 	/* Only update cache if timer has expired or we have no data
 	if we fail just silently return as we will try later */
-	if time.Since(user_update) >= time.Second*time.Duration(config.Users_reload) || len(users.Users) == 0 {
-		user_update = time.Now()
+	if time.Since(monitor.User_update) >= time.Second*time.Duration(config.Users_reload) || len(monitor.Users.Users) == 0 {
+		monitor.User_update = time.Now()
 		client := &http.Client{}
 		reqs, err := http.NewRequest("GET", config.Users, nil)
 
@@ -99,13 +107,13 @@ func nameLookup(config *Config) {
 		if err != nil {
 			return
 		}
-		err = json.Unmarshal(body, &users)
+		err = json.Unmarshal(body, &monitor.Users)
 		if err != nil {
 			fmt.Println(err)
 		}
 
-		for _, u := range users.Users {
-			user_name[strconv.Itoa(u.Id)] = u.Name
+		for _, u := range monitor.Users.Users {
+			monitor.User_name[strconv.Itoa(u.Id)] = u.Name
 		}
 
 	}
@@ -114,20 +122,34 @@ func nameLookup(config *Config) {
 func req(w http.ResponseWriter, r *http.Request) {
 	w.Header().Add("Content-Type", "application/json")
 
-	mu.Lock()
-	stats.Hits++
-	last_access = time.Now()
-	json.NewEncoder(w).Encode(calls)
-	mu.Unlock()
+	monitor.Mu.Lock()
+	monitor.Stats.Hits++
+
+	/* Wait for new data */
+	if monitor.Cache_stale {
+		monitor.Last_access = time.Now()
+		for {
+			monitor.Mu.Unlock()
+			time.Sleep(time.Millisecond * 10)
+			monitor.Mu.Lock()
+			if !monitor.Cache_stale {
+				break
+			}
+		}
+	}
+
+	monitor.Last_access = time.Now()
+	json.NewEncoder(w).Encode(monitor.Calls)
+	monitor.Mu.Unlock()
 }
 
 func getStats(w http.ResponseWriter, r *http.Request) {
 	w.Header().Add("Content-Type", "application/json")
 
-	mu.Lock()
-	stats.Uptime = uint64(time.Since(uptime)) / 100_000_000_0
-	json.NewEncoder(w).Encode(stats)
-	mu.Unlock()
+	monitor.Mu.Lock()
+	monitor.Stats.Uptime = uint64(time.Since(monitor.Uptime)) / 100_000_000_0
+	json.NewEncoder(w).Encode(monitor.Stats)
+	monitor.Mu.Unlock()
 }
 
 func serv() {
@@ -148,7 +170,7 @@ func scrape(config *Config, callback chan []Call) {
 		h.ForEach("tr", func(_ int, el *colly.HTMLElement) {
 			if el.ChildText("td:nth-child(1)") != "" {
 				this_call := Call{Num: el.ChildText("td:nth-child(1)"), Date: el.ChildText("td:nth-child(3)"), Call: el.ChildText("td:nth-child(8)"), Id: el.ChildText("td:nth-child(7)"), Sec: el.ChildText("td:nth-child(4)"), Slot: el.ChildText("td:nth-child(10)"), Talkgroup: el.ChildText("td:nth-child(11)")}
-				this_call.Name = user_name[this_call.Id]
+				this_call.Name = monitor.User_name[this_call.Id]
 				new_calls = append(new_calls, this_call)
 			}
 		})
@@ -156,6 +178,14 @@ func scrape(config *Config, callback chan []Call) {
 
 	c.Visit(config.Page)
 	callback <- new_calls
+}
+
+func (config *Monitor) updateCheck() bool {
+	monitor.Mu.Lock()
+	monitor.Cache_stale = time.Since(monitor.Last_access) >= time.Minute*monitor.Config.Last_access
+	monitor.Stats.Cache = monitor.Cache_stale
+	monitor.Mu.Unlock()
+	return monitor.Cache_stale
 }
 
 func main() {
@@ -173,17 +203,16 @@ func main() {
 		os.Exit(-1)
 	}
 
-	var config Config
-	if err := json.Unmarshal(cFile, &config); err != nil {
+	if err := json.Unmarshal(cFile, &monitor.Config); err != nil {
 		fmt.Println("Trouble parsing config file: ", err)
 	}
 
 	callback := make(chan []Call)
-	last_access = time.Now()
+	monitor.Last_access = time.Now()
 	last_update := time.Now()
-	uptime = time.Now()
-	user_update = time.Now()
-	user_name = make(map[string]string)
+	monitor.Uptime = time.Now()
+	monitor.User_update = time.Now()
+	monitor.User_name = make(map[string]string)
 	/* Serve the API service */
 	go serv()
 
@@ -191,17 +220,17 @@ func main() {
 		time.Sleep(time.Millisecond * 256)
 
 		/* If we're idle don't scrape */
-		if time.Since(last_access) >= time.Minute*config.Last_access {
+		if monitor.updateCheck() {
 			continue
 		}
 
-		if time.Since(last_update) >= time.Second*config.Reload {
+		if time.Since(last_update) >= time.Second*monitor.Config.Reload {
 			last_update = time.Now()
-			go scrape(&config, callback)
-			mu.Lock()
-			stats.Refresh++
-			calls = <-callback
-			mu.Unlock()
+			go scrape(&monitor.Config, callback)
+			monitor.Mu.Lock()
+			monitor.Stats.Refresh++
+			monitor.Calls = <-callback
+			monitor.Mu.Unlock()
 		}
 	}
 }
