@@ -107,8 +107,7 @@ func nameLookup(config *Config) {
 		if err != nil {
 			return
 		}
-		err = json.Unmarshal(body, &monitor.Users)
-		if err != nil {
+		if err := json.Unmarshal(body, &monitor.Users); err != nil {
 			fmt.Println(err)
 		}
 
