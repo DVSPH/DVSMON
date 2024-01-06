@@ -29,6 +29,7 @@ This internal API is used to provide last heard dashboard data on the dvsph.net 
 - /monitor/stats
 ```
 {
+  "stale_cache":false,                                          / Is the cache stale
   "hits":95,                                                    / Number of API hits
   "refresh":287,                                                / How many times the system has scraped data
   "uptime":914                                                  / API uptime in seconds
