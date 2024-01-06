@@ -54,7 +54,6 @@ type Stats struct {
 
 /*
 User data from radioid.net database
-we can save memory by ignoring unused fields if required
 */
 type Users struct {
 	Users []struct {
@@ -81,7 +80,7 @@ type Config struct {
 /* Pull data from radioid.net user dump */
 func nameLookup(config *Config) {
 	/* Only update cache if timer has expired or we have no data
-	if we fail just silently return as we will try later */
+	if we fail just silently return */
 	if time.Since(monitor.User_update) >= time.Second*time.Duration(config.Users_reload) || len(monitor.Users.Users) == 0 {
 		monitor.User_update = time.Now()
 		client := &http.Client{}
@@ -160,7 +159,7 @@ func serv() {
 }
 
 /* Scrape the dashboard */
-func scrape(config *Config, callback chan []Call) {
+func scrape(config *Config, monitor *Monitor) {
 	var new_calls []Call
 	c := colly.NewCollector()
 	nameLookup(config)
@@ -175,7 +174,10 @@ func scrape(config *Config, callback chan []Call) {
 	})
 
 	c.Visit(config.Page)
-	callback <- new_calls
+	monitor.Mu.Lock()
+	monitor.Calls = new_calls
+	monitor.Stats.Refresh++
+	monitor.Mu.Unlock()
 }
 
 func (config *Monitor) updateCheck() bool {
@@ -205,7 +207,6 @@ func main() {
 		fmt.Println("Trouble parsing config file: ", err)
 	}
 
-	callback := make(chan []Call)
 	monitor.Last_access = time.Now()
 	last_update := time.Now()
 	monitor.Uptime = time.Now()
@@ -224,11 +225,7 @@ func main() {
 
 		if time.Since(last_update) >= time.Second*monitor.Config.Reload {
 			last_update = time.Now()
-			go scrape(&monitor.Config, callback)
-			monitor.Mu.Lock()
-			monitor.Stats.Refresh++
-			monitor.Calls = <-callback
-			monitor.Mu.Unlock()
+			go scrape(&monitor.Config, &monitor)
 		}
 	}
 }
